@@ -154,16 +154,22 @@ class TorchAlgo(Algo):
 
         predictions = torch.Tensor([])
         with torch.inference_mode():
-            for x in predict_loader:
-                x = x.to(self._device)
-                predictions = torch.cat((predictions, self._model(x)), 0)
+            for batch in predict_loader:
+                batch_mps = {
+                    'input_ids': batch['input_ids'].to(self._device),
+                    'attention_mask': batch['attention_mask'].to(self._device),
+                    'labels': batch['labels'].to(self._device)
+                }
+                outputs = self._model(**batch_mps)
+                preds = outputs.logits
+                predictions = torch.cat((predictions, preds), 0)
 
         predictions = predictions.cpu().detach()
         self._save_predictions(predictions, predictions_path)
 
     def _local_train(
-        self,
-        train_dataset: torch.utils.data.Dataset,
+            self,
+            train_dataset: torch.utils.data.Dataset,
     ):
         """Local train method. Contains the local training loop.
 
@@ -209,17 +215,29 @@ class TorchAlgo(Algo):
         # Create torch dataloader
         train_data_loader = torch.utils.data.DataLoader(train_dataset, batch_sampler=self._index_generator)
 
-        for x_batch, y_batch in train_data_loader:
-            x_batch = x_batch.to(self._device)
-            y_batch = y_batch.to(self._device)
 
-            # Forward pass
-            y_pred = self._model(x_batch)
+        for batch in train_data_loader:
+            batch_mps = {
+                'input_ids': batch['input_ids'].to(self._device),
+                'attention_mask': batch['attention_mask'].to(self._device),
+                'labels': batch['labels'].to(self._device)
+            }
 
-            # Compute Loss
-            loss = self._criterion(y_pred, y_batch)
+            # (Forward pass)
+            # train model on batch and return outputs (incl. loss)
+            outputs = self._model(**batch_mps)
+
+            # (Compute Loss)
+            # extract loss
+            # loss = outputs.loss
+            loss = self._criterion(outputs.logits, batch_mps["labels"])
+
+
+            # initialize calculated gradients (from prev step)
             self._optimizer.zero_grad()
+            # calculate loss for every parameter that needs grad update
             loss.backward()
+            # update parameters
             self._optimizer.step()
 
             if self._scheduler is not None:
